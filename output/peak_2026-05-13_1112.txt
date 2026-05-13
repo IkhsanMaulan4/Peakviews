@@ -1,0 +1,32 @@
+Segmen	BOG-YT	BOG-TT	MPL-YT	MPL-TT	TOTAL
+Waiting Screen	0	0	0	0	0
+TVC	0	0	0	0	0
+Opening Caster	0	0	0	0	0
+Trivia	0	0	0	0	0
+Match 1 - Game #1 Pre Game	0	0	0	0	0
+Match 1 - Game #1 In Game	0	0	0	0	0
+Match 1 - Game #1 Post Game	0	0	0	0	0
+Match 1 - Game #2 Pre Game	0	0	0	0	0
+Match 1 - Game #2 In Game	0	0	0	0	0
+Match 1 - Game #2 Post Game	0	0	0	0	0
+Match 1 - Game #3 Pre Game	0	0	0	0	0
+Match 1 - Game #3 In Game	0	0	0	0	0
+Match 1 - Game #3 Post Game	0	0	0	0	0
+Match 2 - Game #1 Pre Game	0	0	0	0	0
+Match 2 - Game #1 In Game	0	0	0	0	0
+Match 2 - Game #1 Post Game	0	0	0	0	0
+Match 2 - Game #2 Pre Game	0	0	0	0	0
+Match 2 - Game #2 In Game	0	0	0	0	0
+Match 2 - Game #2 Post Game	0	0	0	0	0
+Match 2 - Game #3 Pre Game	0	0	0	0	0
+Match 2 - Game #3 In Game	0	0	0	0	0
+Match 2 - Game #3 Post Game	0	0	0	0	0
+Match 3 - Game #1 Pre Game	0	0	0	0	0
+Match 3 - Game #1 In Game	0	0	0	0	0
+Match 3 - Game #1 Post Game	0	0	0	0	0
+Match 3 - Game #2 Pre Game	0	0	0	0	0
+Match 3 - Game #2 In Game	0	0	0	0	0
+Match 3 - Game #2 Post Game	0	0	0	0	0
+Match 3 - Game #3 Pre Game	0	0	0	0	0
+Match 3 - Game #3 In Game	0	0	0	0	0
+Match 3 - Game #3 Post Game	0	0	0	0	0
