@@ -7,7 +7,8 @@ from pathlib import Path
 
 from segments import SEGMENTS, SOURCES
 from storage import PeakStore
-from capture import capture_all
+from capture import capture_all, capture_all_with_debug
+from debug_window import OcrDebugWindow
 from calibration import load_calibration, run_calibration, run_edit_calibration
 
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -22,9 +23,9 @@ class PeakViewApp:
         self.store = PeakStore()
         self.seg_index = 0
         self.live = {src: None for src in self.active_sources}
+        self.debug_window: OcrDebugWindow | None = None
         self.status = tk.StringVar(value="Ready")
         self._stop = threading.Event()
-        # Session output file - fixed name for the session, auto-overwritten
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         self.session_file = OUTPUT_DIR / f"peak_{stamp}.txt"
@@ -74,6 +75,7 @@ class PeakViewApp:
         tk.Button(btn_frame2, text="Recalibrate", width=11, command=self.recalibrate).grid(row=0, column=0, padx=2)
         tk.Button(btn_frame2, text="Edit Boxes", width=10, command=self.edit_boxes).grid(row=0, column=1, padx=2)
         tk.Button(btn_frame2, text="Export TXT", width=11, command=self.export).grid(row=0, column=2, padx=2)
+        tk.Button(btn_frame2, text="Debug", width=7, command=self.toggle_debug).grid(row=0, column=3, padx=2)
 
         tk.Label(self.root, textvariable=self.status, fg="gray", font=("Arial", 8)).pack(side="bottom", pady=2)
 
@@ -105,14 +107,19 @@ class PeakViewApp:
         cycles_since_save = 0
         while not self._stop.is_set():
             try:
-                results = capture_all(self.regions)
+                dbg = self.debug_window  # snapshot once per cycle
+                if dbg is not None:
+                    debug_results = capture_all_with_debug(self.regions)
+                    results = {k: r["value"] for k, r in debug_results.items()}
+                    self.root.after(0, lambda r=debug_results, w=dbg: w.update_debug(r))
+                else:
+                    results = capture_all(self.regions)
                 self.live = results
                 seg = SEGMENTS[self.seg_index]
                 for label, val in results.items():
                     self.store.update(seg, label, val)
                 self.root.after(0, self._render)
                 cycles_since_save += 1
-                # Periodic auto-save every ~10s of captures
                 if cycles_since_save >= 10:
                     cycles_since_save = 0
                     self.root.after(0, self._auto_save)
@@ -153,7 +160,6 @@ class PeakViewApp:
 
     def recalibrate(self):
         self.status.set("Membuka calibration...")
-        # Temporarily disable topmost so the calibration fullscreen window can cover us
         try:
             self.root.attributes("-topmost", False)
         except Exception:
@@ -167,7 +173,6 @@ class PeakViewApp:
         if new_regions:
             self.regions = new_regions
             self.active_sources = [s for s in SOURCES if s in new_regions]
-            # Rebuild live labels for the new set of active sources
             for widget in self.live_frame.winfo_children():
                 widget.destroy()
             self.live_labels = {}
@@ -211,6 +216,27 @@ class PeakViewApp:
             self.status.set(f"Saved: {path.name}")
         except Exception as e:
             self.status.set(f"Export err: {e}")
+
+    def toggle_debug(self):
+        if self.debug_window is not None:
+            try:
+                self.debug_window.destroy()
+            except Exception:
+                pass
+            self.debug_window = None
+            self.status.set("Debug window closed")
+            return
+        if not self.active_sources:
+            self.status.set("No active sources to debug — calibrate first")
+            return
+        self.debug_window = OcrDebugWindow(
+            self.root, self.active_sources, on_close=self._on_debug_close
+        )
+        self.status.set("Debug window opened")
+
+    def _on_debug_close(self):
+        self.debug_window = None
+        self.status.set("Debug window closed")
 
     def _on_close(self):
         self._stop.set()
