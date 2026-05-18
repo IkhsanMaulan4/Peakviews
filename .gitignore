@@ -3,6 +3,7 @@ dist/
 *.zip
 __pycache__/
 *.pyc
+.venv/
 
 # Local agent / IDE config
 .claude/
