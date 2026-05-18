@@ -1,19 +1,72 @@
 """In-memory peak tracker + TSV export."""
+import statistics
+from collections import deque
 from pathlib import Path
 from datetime import datetime
 from segments import SEGMENTS, SOURCES
 
 
 class PeakStore:
+    # Anti-spike layered defense for noisy OCR reads:
+    #   1. Buffer of 7 samples, peak update gated on median.
+    #   2. Agreement check: median accepted only if >=5 of 7 reads fall within
+    #      ±5% of it. Filters bursts where OCR misreads the same digit twice.
+    #   3. Spike guard: a confirmed value >1.3× current peak must persist as
+    #      the consistent median across 3 consecutive update cycles before
+    #      being applied. Real viewer counts climb smoothly; OCR jumps don't.
+    BUFFER_SIZE = 7
+    AGREEMENT_TOL = 0.05
+    MIN_AGREE = 5
+    SPIKE_RATIO = 1.3
+    SPIKE_CONFIRMS = 3
+
     def __init__(self):
         # {segment: {label: int}}
         self.peaks = {seg: {src: 0 for src in SOURCES} for seg in SEGMENTS}
+        # Per-source rolling buffer of recent OCR reads (shared across segments —
+        # the OCR sees the same on-screen counters regardless of which segment is selected).
+        self.recent = {src: deque(maxlen=self.BUFFER_SIZE) for src in SOURCES}
+        # Per-(segment,source) candidate awaiting spike confirmation.
+        # Entry: {"value": int, "count": int} or None.
+        self._pending = {seg: {src: None for src in SOURCES} for seg in SEGMENTS}
 
     def update(self, segment: str, label: str, value):
         if value is None or value <= 0:
             return
-        if value > self.peaks[segment][label]:
-            self.peaks[segment][label] = value
+        buf = self.recent[label]
+        buf.append(value)
+        if len(buf) < self.BUFFER_SIZE:
+            return
+
+        confirmed = int(statistics.median(buf))
+        if confirmed <= 0:
+            return
+
+        tol = confirmed * self.AGREEMENT_TOL
+        agree = sum(1 for v in buf if abs(v - confirmed) <= tol)
+        if agree < self.MIN_AGREE:
+            self._pending[segment][label] = None
+            return
+
+        current_peak = self.peaks[segment][label]
+        if confirmed <= current_peak:
+            self._pending[segment][label] = None
+            return
+
+        # Spike guard: large jumps must repeat across SPIKE_CONFIRMS cycles.
+        if current_peak > 0 and confirmed > current_peak * self.SPIKE_RATIO:
+            pending = self._pending[segment][label]
+            if pending is not None and abs(confirmed - pending["value"]) <= pending["value"] * self.AGREEMENT_TOL:
+                pending["count"] += 1
+                if pending["count"] >= self.SPIKE_CONFIRMS:
+                    self.peaks[segment][label] = confirmed
+                    self._pending[segment][label] = None
+            else:
+                self._pending[segment][label] = {"value": confirmed, "count": 1}
+            return
+
+        self.peaks[segment][label] = confirmed
+        self._pending[segment][label] = None
 
     def get_current(self, segment: str) -> dict:
         return dict(self.peaks[segment])
@@ -21,6 +74,7 @@ class PeakStore:
     def reset_segment(self, segment: str):
         if segment in self.peaks:
             self.peaks[segment] = {src: 0 for src in SOURCES}
+            self._pending[segment] = {src: None for src in SOURCES}
 
     def _build_tsv(self) -> str:
         lines = ["Segmen\t" + "\t".join(SOURCES) + "\tTOTAL"]

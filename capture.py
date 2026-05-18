@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 import mss
 import pytesseract
 from PIL import Image, ImageFilter, ImageOps
@@ -19,15 +20,11 @@ if not shutil.which("tesseract"):
             break
 
 _WHITELIST = "0123456789KMkmRrBbJjTt., "
-# PSM 6  = single uniform block
-# PSM 7  = single text line  (best for tight calibrated box)
-# PSM 8  = single word
-# PSM 11 = sparse text (fallback when number floats in cluttered region)
+# PSM 8 (single word) + PSM 7 (single line) are the most reliable for tight digit crops.
+# Each tesseract call spawns a subprocess (~80-150ms on Windows), so we keep this minimal.
 OCR_CONFIGS = [
-    f"--psm 7 -c tessedit_char_whitelist={_WHITELIST}",
     f"--psm 8 -c tessedit_char_whitelist={_WHITELIST}",
-    f"--psm 6 -c tessedit_char_whitelist={_WHITELIST}",
-    f"--psm 11 -c tessedit_char_whitelist={_WHITELIST}",
+    f"--psm 7 -c tessedit_char_whitelist={_WHITELIST}",
 ]
 
 # Match number tokens like: 1234, 1,234, 1.2K, 1.5M, 2 jt, 850 rb
@@ -117,7 +114,7 @@ def _binarize(img: Image.Image) -> Image.Image:
 
 
 def _preprocess(img: Image.Image):
-    """Yield (name, image) variants: binarized + binarized-inverted + grayscale fallback."""
+    """Yield (name, image) variants: binarized + binarized-inverted."""
     # 4x upscale + sharpen makes thin digit strokes much easier for Tesseract
     img = img.convert("L")
     img = img.resize((img.width * 4, img.height * 4), Image.LANCZOS)
@@ -127,18 +124,12 @@ def _preprocess(img: Image.Image):
     binar = _binarize(img)
     yield "bin", binar
     yield "bin_inv", ImageOps.invert(binar)
-    yield "gray", img  # fallback for cases where binarization clips strokes
 
 
-def _ocr_region(sct, region):
-    """Grab one region, run OCR with multiple preprocessings + PSM modes,
-    vote across all readings: most-frequent number wins.
+def _ocr_image(img: Image.Image):
+    """Run OCR with multiple preprocessings + PSM modes, vote across readings.
+    Most-frequent number wins; ties broken by digit-count evidence then value.
     """
-    x, y, w, h = region
-    bbox = {"left": int(x), "top": int(y), "width": int(w), "height": int(h)}
-    raw = sct.grab(bbox)
-    img = Image.frombytes("RGB", raw.size, raw.rgb)
-
     votes: Counter = Counter()
     digit_evidence: dict[int, int] = {}
     for _, variant in _preprocess(img):
@@ -150,14 +141,11 @@ def _ocr_region(sct, region):
             digits_in_text = sum(1 for c in text if c.isdigit())
             for val in _extract_numbers(text):
                 votes[val] += 1
-                # Track max digits-read among reads that produced this val
-                # (more digits in raw output = stronger evidence the read was clean)
                 if digits_in_text > digit_evidence.get(val, 0):
                     digit_evidence[val] = digits_in_text
 
     if not votes:
         return None
-    # Sort by: vote count desc, then digit evidence desc, then value desc
     ranked = sorted(
         votes.items(),
         key=lambda kv: (kv[1], digit_evidence.get(kv[0], 0), kv[0]),
@@ -166,13 +154,35 @@ def _ocr_region(sct, region):
     return ranked[0][0]
 
 
+def _grab(sct, region) -> Image.Image:
+    x, y, w, h = region
+    bbox = {"left": int(x), "top": int(y), "width": int(w), "height": int(h)}
+    raw = sct.grab(bbox)
+    return Image.frombytes("RGB", raw.size, raw.rgb)
+
+
 def capture_all(regions: dict) -> dict:
-    """regions: {label: [x,y,w,h]} -> {label: int|None}."""
-    result = {}
+    """regions: {label: [x,y,w,h]} -> {label: int|None}.
+
+    Screenshots are grabbed sequentially (mss isn't thread-safe), then OCR
+    runs in parallel — tesseract spawns subprocesses that release the GIL,
+    so threading gives near-linear speedup across sources.
+    """
+    if not regions:
+        return {}
+
     with mss.mss() as sct:
-        for label, region in regions.items():
-            try:
-                result[label] = _ocr_region(sct, region)
-            except Exception:
-                result[label] = None
+        grabs = {label: _grab(sct, region) for label, region in regions.items()}
+
+    def ocr_one(item):
+        label, img = item
+        try:
+            return label, _ocr_image(img)
+        except Exception:
+            return label, None
+
+    result = {}
+    with ThreadPoolExecutor(max_workers=min(len(grabs), 5)) as ex:
+        for label, val in ex.map(ocr_one, grabs.items()):
+            result[label] = val
     return result

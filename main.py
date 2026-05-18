@@ -8,10 +8,10 @@ from pathlib import Path
 from segments import SEGMENTS, SOURCES
 from storage import PeakStore
 from capture import capture_all
-from calibration import load_calibration, run_calibration
+from calibration import load_calibration, run_calibration, run_edit_calibration
 
 OUTPUT_DIR = Path(__file__).parent / "output"
-POLL_INTERVAL = 1.0  # seconds
+POLL_INTERVAL = 0.3  # seconds
 
 
 class PeakViewApp:
@@ -72,7 +72,8 @@ class PeakViewApp:
         btn_frame2 = tk.Frame(self.root)
         btn_frame2.pack(**pad)
         tk.Button(btn_frame2, text="Recalibrate", width=11, command=self.recalibrate).grid(row=0, column=0, padx=2)
-        tk.Button(btn_frame2, text="Export TXT (save as)", width=18, command=self.export).grid(row=0, column=1, padx=2)
+        tk.Button(btn_frame2, text="Edit Boxes", width=10, command=self.edit_boxes).grid(row=0, column=1, padx=2)
+        tk.Button(btn_frame2, text="Export TXT", width=11, command=self.export).grid(row=0, column=2, padx=2)
 
         tk.Label(self.root, textvariable=self.status, fg="gray", font=("Arial", 8)).pack(side="bottom", pady=2)
 
@@ -181,6 +182,28 @@ class PeakViewApp:
             self._render()
         else:
             self.status.set("Calibration dibatalkan")
+
+    def edit_boxes(self):
+        if not self.regions:
+            self.status.set("Belum ada calibration. Pakai Recalibrate dulu.")
+            return
+        self.status.set("Membuka editor box...")
+        try:
+            self.root.attributes("-topmost", False)
+        except Exception:
+            pass
+        new_regions = run_edit_calibration(self.regions, parent=self.root)
+        try:
+            self.root.attributes("-topmost", True)
+            self.root.lift()
+        except Exception:
+            pass
+        if new_regions:
+            self.regions = new_regions
+            self.status.set(f"Box disimpan ({len(self.regions)} source)")
+            self._render()
+        else:
+            self.status.set("Edit dibatalkan")
 
     def export(self):
         try:

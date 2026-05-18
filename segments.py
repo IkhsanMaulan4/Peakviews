@@ -1,6 +1,6 @@
 """Daftar segment untuk format BO3 (3 Match x 3 Game x 3 phase + 4 intro = 31)."""
 
-SOURCES = ["BOG-YT", "BOG-TT", "MPL-YT", "MPL-TT"]
+SOURCES = ["BOG-YT", "MPL-YT", "MDL-YT", "DG-YT", "BYu-YT"]
 
 
 def _build_segments():
