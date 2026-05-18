@@ -26,6 +26,15 @@ def _bundle_resources_dir() -> Path:
 
 
 def bundled_tesseract() -> Path | None:
-    """Return path to bundled tesseract.exe if present (frozen build), else None."""
-    candidate = _bundle_resources_dir() / "tesseract" / "tesseract.exe"
-    return candidate if candidate.exists() else None
+    """Return path to bundled tesseract.exe if present, else None.
+    Frozen: _MEIPASS/tesseract/tesseract.exe (PyInstaller datas layout).
+    Source: vendor/tesseract/tesseract.exe (same binary we ship in the bundle),
+    so `python main.py` works without a system-wide Tesseract install.
+    """
+    for candidate in (
+        _bundle_resources_dir() / "tesseract" / "tesseract.exe",
+        Path(__file__).parent / "vendor" / "tesseract" / "tesseract.exe",
+    ):
+        if candidate.exists():
+            return candidate
+    return None
