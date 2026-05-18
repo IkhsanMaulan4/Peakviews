@@ -71,11 +71,12 @@ class OcrDebugWindow(tk.Toplevel):
                     continue
                 value = payload.get("value")
                 votes: Counter = payload.get("votes") or Counter()
+                conf: dict = payload.get("conf") or {}
                 bin_img = payload.get("bin")
                 inv_img = payload.get("bin_inv")
 
                 header.config(text=f"{src}    final: {self._fmt(value)}")
-                self._vote_labels[src].config(text=self._fmt_votes(votes))
+                self._vote_labels[src].config(text=self._fmt_votes(votes, conf))
 
                 refs: list[ImageTk.PhotoImage] = []
                 bin_lbl, inv_lbl = self._image_labels[src]
@@ -108,8 +109,19 @@ class OcrDebugWindow(tk.Toplevel):
         return f"{value:,}"
 
     @staticmethod
-    def _fmt_votes(votes: Counter) -> str:
+    def _fmt_votes(votes: Counter, conf: dict | None = None) -> str:
         if not votes:
             return "votes: --"
-        items = sorted(votes.items(), key=lambda kv: (-kv[1], -kv[0]))
-        return "votes: " + ", ".join(f"{v:,}×{c}" for v, c in items)
+        # Rank for display: vote count, then confidence, then value — mirrors
+        # _ocr_image_core's tie-break so the winning candidate sorts first.
+        items = sorted(
+            votes.items(),
+            key=lambda kv: (-kv[1], -(conf or {}).get(kv[0], 0.0), -kv[0]),
+        )
+        parts = []
+        for v, c in items:
+            if conf and v in conf:
+                parts.append(f"{v:,}×{c} ({int(conf[v])})")
+            else:
+                parts.append(f"{v:,}×{c}")
+        return "votes: " + ", ".join(parts)

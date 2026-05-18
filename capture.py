@@ -6,6 +6,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import mss
 import pytesseract
+from pytesseract import Output
 from PIL import Image, ImageFilter, ImageOps
 from paths import bundled_tesseract
 
@@ -130,39 +131,98 @@ def _preprocess(img: Image.Image):
     yield "bin_inv", ImageOps.invert(binar)
 
 
+def _reconstruct_text(words: list) -> str:
+    """Join tesseract word tokens with bbox-aware spacing: adjacent words
+    (small gap) glue together, normal gaps become a space. Prevents over-
+    tokenization like ['5,', '613'] from being read as two separate numbers,
+    which matters for locales that use '.' or ',' as thousand separators.
+    """
+    if not words:
+        return ""
+    lines: dict = {}
+    for w in words:
+        lines.setdefault(w["line"], []).append(w)
+    out = []
+    for key in sorted(lines):
+        row = sorted(lines[key], key=lambda w: w["left"])
+        # avg char width — single-char tokens dominate when tesseract splits punctuation
+        avg_char = sum(w["width"] / max(len(w["text"]), 1) for w in row) / len(row)
+        glue = avg_char * 0.5
+        parts = [row[0]["text"]]
+        prev = row[0]
+        for w in row[1:]:
+            gap = w["left"] - (prev["left"] + prev["width"])
+            parts.append(("" if gap < glue else " ") + w["text"])
+            prev = w
+        out.append("".join(parts))
+    return " ".join(out)
+
+
+def _ocr_call(variant: Image.Image, config: str):
+    """Run one tesseract pass. Returns (numbers, avg_conf, digits_in_text).
+    avg_conf is the mean of word-level confidences (0-100), ignoring tesseract's
+    -1 "no confidence" markers; 0.0 if no scored words.
+    """
+    try:
+        data = pytesseract.image_to_data(variant, config=config, output_type=Output.DICT)
+    except Exception:
+        return [], 0.0, 0
+    words = []
+    for i, t in enumerate(data["text"]):
+        if not t or not t.strip():
+            continue
+        # Tesseract 5.x emits conf as fractional ("94.371071"); pytesseract
+        # keeps it as a string because '.' fails .isdigit(). Go via float().
+        words.append({
+            "text": t,
+            "conf": float(data["conf"][i]),
+            "left": int(float(data["left"][i])),
+            "width": int(float(data["width"][i])),
+            "line": (
+                int(float(data["block_num"][i])),
+                int(float(data["par_num"][i])),
+                int(float(data["line_num"][i])),
+            ),
+        })
+    confs = [w["conf"] for w in words if w["conf"] >= 0]
+    avg_conf = sum(confs) / len(confs) if confs else 0.0
+    text = _reconstruct_text(words)
+    digits_in_text = sum(1 for ch in text if ch.isdigit())
+    return list(_extract_numbers(text)), avg_conf, digits_in_text
+
+
 def _ocr_image_core(img: Image.Image):
     """Run OCR with multiple preprocessings + PSM modes, vote across readings.
-    Returns (final_value, votes_counter, variants_list).
-    Variants are kept so debug callers can show what tesseract actually saw.
+    Tie-break by summed word-confidence so a clean read beats a misread that
+    just happened to repeat (e.g. font-confused 5→9).
+    Returns (final_value, votes_counter, confidence_sum, variants_list).
     """
     variants = list(_preprocess(img))
     votes: Counter = Counter()
+    confidence_sum: dict[int, float] = {}
     digit_evidence: dict[int, int] = {}
     for _, variant in variants:
         for config in OCR_CONFIGS:
-            try:
-                text = pytesseract.image_to_string(variant, config=config)
-            except Exception:
-                continue
-            digits_in_text = sum(1 for c in text if c.isdigit())
-            for val in _extract_numbers(text):
+            numbers, avg_conf, digits_in_text = _ocr_call(variant, config)
+            for val in numbers:
                 votes[val] += 1
+                confidence_sum[val] = confidence_sum.get(val, 0.0) + avg_conf
                 if digits_in_text > digit_evidence.get(val, 0):
                     digit_evidence[val] = digits_in_text
 
     if not votes:
-        return None, votes, variants
+        return None, votes, confidence_sum, variants
     ranked = sorted(
         votes.items(),
-        key=lambda kv: (kv[1], digit_evidence.get(kv[0], 0), kv[0]),
+        key=lambda kv: (kv[1], confidence_sum.get(kv[0], 0.0), digit_evidence.get(kv[0], 0)),
         reverse=True,
     )
-    return ranked[0][0], votes, variants
+    return ranked[0][0], votes, confidence_sum, variants
 
 
 def _ocr_image(img: Image.Image):
     """Thin wrapper for callers that only need the voted value."""
-    value, _, _ = _ocr_image_core(img)
+    value, _, _, _ = _ocr_image_core(img)
     return value
 
 
@@ -210,7 +270,8 @@ def capture_all_with_debug(regions: dict) -> dict:
         {label: {"value": int|None,
                  "bin": PIL.Image | None,
                  "bin_inv": PIL.Image | None,
-                 "votes": Counter}}
+                 "votes": Counter,
+                 "conf": {value: avg_confidence}}}
     """
     if not regions:
         return {}
@@ -221,15 +282,17 @@ def capture_all_with_debug(regions: dict) -> dict:
     def ocr_one(item):
         label, img = item
         try:
-            value, votes, variants = _ocr_image_core(img)
+            value, votes, conf_sum, variants = _ocr_image_core(img)
         except Exception:
-            return label, {"value": None, "bin": None, "bin_inv": None, "votes": Counter()}
+            return label, {"value": None, "bin": None, "bin_inv": None, "votes": Counter(), "conf": {}}
         variant_map = {name: im for name, im in variants}
+        avg_conf = {v: conf_sum[v] / votes[v] for v in votes}
         return label, {
             "value": value,
             "bin": variant_map.get("bin"),
             "bin_inv": variant_map.get("bin_inv"),
             "votes": votes,
+            "conf": avg_conf,
         }
 
     result = {}
