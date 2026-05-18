@@ -126,13 +126,15 @@ def _preprocess(img: Image.Image):
     yield "bin_inv", ImageOps.invert(binar)
 
 
-def _ocr_image(img: Image.Image):
+def _ocr_image_core(img: Image.Image):
     """Run OCR with multiple preprocessings + PSM modes, vote across readings.
-    Most-frequent number wins; ties broken by digit-count evidence then value.
+    Returns (final_value, votes_counter, variants_list).
+    Variants are kept so debug callers can show what tesseract actually saw.
     """
+    variants = list(_preprocess(img))
     votes: Counter = Counter()
     digit_evidence: dict[int, int] = {}
-    for _, variant in _preprocess(img):
+    for _, variant in variants:
         for config in OCR_CONFIGS:
             try:
                 text = pytesseract.image_to_string(variant, config=config)
@@ -145,13 +147,19 @@ def _ocr_image(img: Image.Image):
                     digit_evidence[val] = digits_in_text
 
     if not votes:
-        return None
+        return None, votes, variants
     ranked = sorted(
         votes.items(),
         key=lambda kv: (kv[1], digit_evidence.get(kv[0], 0), kv[0]),
         reverse=True,
     )
-    return ranked[0][0]
+    return ranked[0][0], votes, variants
+
+
+def _ocr_image(img: Image.Image):
+    """Thin wrapper for callers that only need the voted value."""
+    value, _, _ = _ocr_image_core(img)
+    return value
 
 
 def _grab(sct, region) -> Image.Image:
