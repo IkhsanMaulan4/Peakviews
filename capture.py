@@ -194,3 +194,42 @@ def capture_all(regions: dict) -> dict:
         for label, val in ex.map(ocr_one, grabs.items()):
             result[label] = val
     return result
+
+
+def capture_all_with_debug(regions: dict) -> dict:
+    """Like capture_all, but also returns the binarized variants and vote
+    tally per source so a debug UI can inspect what tesseract saw and how
+    the vote resolved. Slower than capture_all (carries PIL images back to
+    caller); only use when a debug window is open.
+
+    regions: {label: [x,y,w,h]} ->
+        {label: {"value": int|None,
+                 "bin": PIL.Image | None,
+                 "bin_inv": PIL.Image | None,
+                 "votes": Counter}}
+    """
+    if not regions:
+        return {}
+
+    with mss.mss() as sct:
+        grabs = {label: _grab(sct, region) for label, region in regions.items()}
+
+    def ocr_one(item):
+        label, img = item
+        try:
+            value, votes, variants = _ocr_image_core(img)
+        except Exception:
+            return label, {"value": None, "bin": None, "bin_inv": None, "votes": Counter()}
+        variant_map = {name: im for name, im in variants}
+        return label, {
+            "value": value,
+            "bin": variant_map.get("bin"),
+            "bin_inv": variant_map.get("bin_inv"),
+            "votes": votes,
+        }
+
+    result = {}
+    with ThreadPoolExecutor(max_workers=min(len(grabs), 5)) as ex:
+        for label, payload in ex.map(ocr_one, grabs.items()):
+            result[label] = payload
+    return result
