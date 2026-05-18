@@ -76,6 +76,25 @@ class PeakStore:
             self.peaks[segment] = {src: 0 for src in SOURCES}
             self._pending[segment] = {src: None for src in SOURCES}
 
+    def reconfigure_sources(self, new_sources: list, rename_map: dict | None = None):
+        """Reshape internal source-keyed structures to match new_sources.
+        rename_map: {old_label: new_label} — preserves recent/peak/pending state
+        across renames. Removed sources are dropped; brand-new sources start at 0.
+        """
+        rename_map = rename_map or {}
+        inv = {new: old for old, new in rename_map.items()}
+
+        new_recent = {}
+        for src in new_sources:
+            old = inv.get(src, src)
+            new_recent[src] = self.recent[old] if old in self.recent else deque(maxlen=self.BUFFER_SIZE)
+        self.recent = new_recent
+
+        for seg in self.peaks:
+            old_peaks = self.peaks[seg]
+            self.peaks[seg] = {src: old_peaks.get(inv.get(src, src), 0) for src in new_sources}
+            self._pending[seg] = {src: None for src in new_sources}
+
     def _build_tsv(self) -> str:
         lines = ["Segmen\t" + "\t".join(SOURCES) + "\tTOTAL"]
         for seg in SEGMENTS:

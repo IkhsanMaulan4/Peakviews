@@ -5,11 +5,12 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 
-from segments import SEGMENTS, SOURCES
+from segments import SEGMENTS, SOURCES, reload_sources, save_sources
 from storage import PeakStore
 from capture import capture_all, capture_all_with_debug
 from debug_window import OcrDebugWindow
-from calibration import load_calibration, run_calibration, run_edit_calibration
+from calibration import load_calibration, run_calibration, run_edit_calibration, save_calibration
+from source_editor import run_source_editor
 from paths import app_dir
 
 OUTPUT_DIR = app_dir() / "output"
@@ -73,10 +74,11 @@ class PeakViewApp:
 
         btn_frame2 = tk.Frame(self.root)
         btn_frame2.pack(**pad)
-        tk.Button(btn_frame2, text="Recalibrate", width=11, command=self.recalibrate).grid(row=0, column=0, padx=2)
-        tk.Button(btn_frame2, text="Edit Boxes", width=10, command=self.edit_boxes).grid(row=0, column=1, padx=2)
-        tk.Button(btn_frame2, text="Export TXT", width=11, command=self.export).grid(row=0, column=2, padx=2)
-        tk.Button(btn_frame2, text="Debug", width=7, command=self.toggle_debug).grid(row=0, column=3, padx=2)
+        tk.Button(btn_frame2, text="Recalibrate", width=10, command=self.recalibrate).grid(row=0, column=0, padx=2)
+        tk.Button(btn_frame2, text="Edit Boxes", width=9, command=self.edit_boxes).grid(row=0, column=1, padx=2)
+        tk.Button(btn_frame2, text="Sources", width=8, command=self.edit_sources).grid(row=0, column=2, padx=2)
+        tk.Button(btn_frame2, text="Export TXT", width=10, command=self.export).grid(row=0, column=3, padx=2)
+        tk.Button(btn_frame2, text="Debug", width=6, command=self.toggle_debug).grid(row=0, column=4, padx=2)
 
         tk.Label(self.root, textvariable=self.status, fg="gray", font=("Arial", 8)).pack(side="bottom", pady=2)
 
@@ -210,6 +212,58 @@ class PeakViewApp:
             self._render()
         else:
             self.status.set("Edit dibatalkan")
+
+    def edit_sources(self):
+        result = run_source_editor(self.root, list(SOURCES))
+        if result is None:
+            self.status.set("Edit sources dibatalkan")
+            return
+        new_list, rename_map = result
+
+        # Persist + refresh the in-place SOURCES so existing imports stay valid.
+        save_sources(new_list)
+        reload_sources()
+
+        # Migrate calibration: renames carry regions to the new key, removes drop.
+        inv = {new: old for old, new in rename_map.items()}
+        new_regions = {}
+        for src in new_list:
+            old = inv.get(src, src)
+            if old in self.regions:
+                new_regions[src] = self.regions[old]
+        save_calibration(new_regions)
+        self.regions = new_regions
+
+        # Reshape peak store (preserves recent/peak buffers across renames).
+        self.store.reconfigure_sources(new_list, rename_map)
+
+        # Rebuild live UI — same pattern as recalibrate.
+        self.active_sources = [s for s in new_list if s in new_regions]
+        self.live = {src: None for src in self.active_sources}
+        for widget in self.live_frame.winfo_children():
+            widget.destroy()
+        self.live_labels = {}
+        for i, src in enumerate(self.active_sources):
+            row = i // 2
+            col = i % 2
+            lbl = tk.Label(self.live_frame, text=f"{src}: --", font=("Consolas", 10), width=18, anchor="w")
+            lbl.grid(row=row, column=col, padx=4, pady=2)
+            self.live_labels[src] = lbl
+
+        # Debug window holds stale source list — easiest to drop it.
+        if self.debug_window is not None:
+            try:
+                self.debug_window.destroy()
+            except Exception:
+                pass
+            self.debug_window = None
+
+        self._render()
+        uncalibrated = [s for s in new_list if s not in new_regions]
+        if uncalibrated:
+            self.status.set(f"Sources updated — calibrate: {', '.join(uncalibrated)}")
+        else:
+            self.status.set(f"Sources updated ({len(new_list)} sources)")
 
     def export(self):
         try:

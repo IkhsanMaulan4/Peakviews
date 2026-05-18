@@ -1,6 +1,35 @@
-"""Daftar segment untuk format BO3 (3 Match x 3 Game x 3 phase + 4 intro = 31)."""
+"""Source list (file-backed, editable at runtime) + segment definitions for BO3 format."""
+import json
 
-SOURCES = ["BOG-YT", "MPL-YT", "MDL-YT", "DG-YT", "BYu-YT"]
+from paths import app_dir
+
+DEFAULT_SOURCES = ["BOG-YT", "MPL-YT", "MDL-YT", "DG-YT", "BYu-YT"]
+_SOURCES_FILE = app_dir() / "sources.json"
+
+
+def load_sources() -> list[str]:
+    """Read source labels from sources.json; fall back to defaults if missing/invalid."""
+    if _SOURCES_FILE.exists():
+        try:
+            data = json.loads(_SOURCES_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data and all(isinstance(x, str) and x.strip() for x in data):
+                return [x.strip() for x in data]
+        except Exception:
+            pass
+    return list(DEFAULT_SOURCES)
+
+
+def save_sources(sources: list[str]) -> None:
+    _SOURCES_FILE.write_text(json.dumps(sources, indent=2), encoding="utf-8")
+
+
+def reload_sources() -> None:
+    """Refresh SOURCES in-place so callers holding a reference see the new list."""
+    SOURCES[:] = load_sources()
+
+
+# Mutable list — mutate via reload_sources() so existing imports stay valid.
+SOURCES = load_sources()
 
 
 def _build_segments():
