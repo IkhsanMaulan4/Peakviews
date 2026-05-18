@@ -4,8 +4,9 @@ import tkinter as tk
 from pathlib import Path
 import mss
 from segments import SOURCES
+from paths import app_dir
 
-CALIBRATION_FILE = Path(__file__).parent / "calibration.json"
+CALIBRATION_FILE = app_dir() / "calibration.json"
 
 OVERLAY_ALPHA = 0.35  # 0=fully transparent, 1=opaque. Lower = see streams more clearly.
 

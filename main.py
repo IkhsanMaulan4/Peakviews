@@ -10,8 +10,9 @@ from storage import PeakStore
 from capture import capture_all, capture_all_with_debug
 from debug_window import OcrDebugWindow
 from calibration import load_calibration, run_calibration, run_edit_calibration
+from paths import app_dir
 
-OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR = app_dir() / "output"
 POLL_INTERVAL = 0.3  # seconds
 
 

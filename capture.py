@@ -7,9 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 import mss
 import pytesseract
 from PIL import Image, ImageFilter, ImageOps
+from paths import bundled_tesseract
 
-# Auto-detect Tesseract path on Windows if not in PATH
-if not shutil.which("tesseract"):
+# Auto-detect Tesseract path: prefer bundled (frozen build), else search system installs
+_bundled = bundled_tesseract()
+if _bundled is not None:
+    pytesseract.pytesseract.tesseract_cmd = str(_bundled)
+elif not shutil.which("tesseract"):
     for path in (
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
