@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set VENV_DIR=.venv
+set VENV_DIR=peakview-env
 
 if not exist "%VENV_DIR%\Scripts\python.exe" (
     echo Venv belum ada. Jalankan setup.bat dulu.

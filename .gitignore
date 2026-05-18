@@ -3,7 +3,7 @@ dist/
 *.zip
 __pycache__/
 *.pyc
-.venv/
+peakview-env/
 
 # Local agent / IDE config
 .claude/

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set VENV_DIR=.venv
+set VENV_DIR=peakview-env
 
 if exist "%VENV_DIR%\Scripts\python.exe" (
     echo Venv sudah ada di %VENV_DIR%. Lewati create, lanjut install deps.
