@@ -12,3 +12,4 @@ peakview-env/
 output/
 calibration.json
 sources.json
+segments.json

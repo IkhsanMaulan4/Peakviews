@@ -2,15 +2,21 @@
 import threading
 import time
 import tkinter as tk
+from tkinter import messagebox
 from datetime import datetime
 from pathlib import Path
 
-from segments import SEGMENTS, SOURCES, reload_sources, save_sources
+from segments import (
+    SEGMENTS, SOURCES,
+    reload_sources, save_sources,
+    reload_segments, save_segments,
+)
 from storage import PeakStore
 from capture import capture_all, capture_all_with_debug
 from debug_window import OcrDebugWindow
 from calibration import load_calibration, run_calibration, run_edit_calibration, save_calibration
 from source_editor import run_source_editor
+from segment_editor import run_segment_editor
 from paths import app_dir
 
 OUTPUT_DIR = app_dir() / "output"
@@ -34,7 +40,7 @@ class PeakViewApp:
 
         root.title("Peak View")
         root.attributes("-topmost", True)
-        root.geometry("420x360+1000+50")
+        root.geometry("460x360+1000+50")
         root.resizable(False, False)
 
         self._build_ui()
@@ -76,9 +82,10 @@ class PeakViewApp:
         btn_frame2.pack(**pad)
         tk.Button(btn_frame2, text="Recalibrate", width=10, command=self.recalibrate).grid(row=0, column=0, padx=2)
         tk.Button(btn_frame2, text="Edit Boxes", width=9, command=self.edit_boxes).grid(row=0, column=1, padx=2)
-        tk.Button(btn_frame2, text="Sources", width=8, command=self.edit_sources).grid(row=0, column=2, padx=2)
-        tk.Button(btn_frame2, text="Export TXT", width=10, command=self.export).grid(row=0, column=3, padx=2)
-        tk.Button(btn_frame2, text="Debug", width=6, command=self.toggle_debug).grid(row=0, column=4, padx=2)
+        tk.Button(btn_frame2, text="Sources", width=7, command=self.edit_sources).grid(row=0, column=2, padx=2)
+        tk.Button(btn_frame2, text="Segments", width=8, command=self.edit_segments).grid(row=0, column=3, padx=2)
+        tk.Button(btn_frame2, text="Export TXT", width=9, command=self.export).grid(row=0, column=4, padx=2)
+        tk.Button(btn_frame2, text="Debug", width=6, command=self.toggle_debug).grid(row=0, column=5, padx=2)
 
         tk.Label(self.root, textvariable=self.status, fg="gray", font=("Arial", 8)).pack(side="bottom", pady=2)
 
@@ -264,6 +271,63 @@ class PeakViewApp:
             self.status.set(f"Sources updated — calibrate: {', '.join(uncalibrated)}")
         else:
             self.status.set(f"Sources updated ({len(new_list)} sources)")
+
+    def edit_segments(self):
+        old_segments = list(SEGMENTS)
+        current_seg = old_segments[self.seg_index]
+
+        result = run_segment_editor(self.root, old_segments)
+        if result is None:
+            self.status.set("Edit segments dibatalkan")
+            return
+        new_list, rename_map = result
+
+        kept_originals = set(new_list) | set(rename_map.keys())
+        to_delete = [s for s in old_segments if s not in kept_originals]
+        deleted_with_data = [
+            s for s in to_delete
+            if any(v > 0 for v in self.store.peaks.get(s, {}).values())
+        ]
+
+        if deleted_with_data:
+            shown = deleted_with_data[:10]
+            extra = len(deleted_with_data) - len(shown)
+            lines = []
+            for s in shown:
+                peak_max = max(self.store.peaks[s].values())
+                lines.append(f"• {s} ({self._fmt(peak_max)})")
+            if extra > 0:
+                lines.append(f"… dan {extra} lainnya")
+            body = (
+                "Segmen berikut akan dihapus beserta data peak-nya:\n\n"
+                + "\n".join(lines)
+                + "\n\nLanjut?"
+            )
+            if not messagebox.askyesno("Konfirmasi hapus", body, parent=self.root):
+                self.status.set("Edit segments dibatalkan (data dipertahankan)")
+                return
+
+        # Compute new seg_index BEFORE mutating SEGMENTS — capture thread
+        # reads SEGMENTS[seg_index] each cycle and would IndexError if the
+        # list shrinks while seg_index still points past the new end.
+        new_current_seg = rename_map.get(current_seg, current_seg)
+        if new_current_seg in new_list:
+            new_seg_index = new_list.index(new_current_seg)
+        else:
+            new_seg_index = min(self.seg_index, len(new_list) - 1)
+
+        save_segments(new_list)
+        self.seg_index = new_seg_index
+        reload_segments()
+        self.store.reconfigure_segments(new_list, rename_map)
+
+        self._render()
+        self._auto_save()
+        added = len(new_list) - (len(old_segments) - len(to_delete))
+        if added or to_delete:
+            self.status.set(f"Segments updated ({len(new_list)} total)")
+        else:
+            self.status.set("Segments updated")
 
     def export(self):
         try:

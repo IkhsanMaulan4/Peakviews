@@ -33,6 +33,9 @@ class PeakStore:
     def update(self, segment: str, label: str, value):
         if value is None or value <= 0:
             return
+        # Guard: segment may be mid-removal by the editor while capture thread runs.
+        if segment not in self.peaks or label not in self.recent:
+            return
         buf = self.recent[label]
         buf.append(value)
         if len(buf) < self.BUFFER_SIZE:
@@ -75,6 +78,28 @@ class PeakStore:
         if segment in self.peaks:
             self.peaks[segment] = {src: 0 for src in SOURCES}
             self._pending[segment] = {src: None for src in SOURCES}
+
+    def reconfigure_segments(self, new_segments: list, rename_map: dict | None = None):
+        """Reshape segment-keyed structures to match new_segments.
+        rename_map: {old_segment: new_segment} — preserves peak/pending state
+        across renames. Removed segments are dropped; brand-new segments start at 0.
+        """
+        rename_map = rename_map or {}
+        inv = {new: old for old, new in rename_map.items()}
+        sources = list(next(iter(self.peaks.values())).keys()) if self.peaks else []
+
+        new_peaks = {}
+        new_pending = {}
+        for seg in new_segments:
+            old = inv.get(seg, seg)
+            if old in self.peaks:
+                new_peaks[seg] = dict(self.peaks[old])
+                new_pending[seg] = dict(self._pending[old])
+            else:
+                new_peaks[seg] = {src: 0 for src in sources}
+                new_pending[seg] = {src: None for src in sources}
+        self.peaks = new_peaks
+        self._pending = new_pending
 
     def reconfigure_sources(self, new_sources: list, rename_map: dict | None = None):
         """Reshape internal source-keyed structures to match new_sources.
