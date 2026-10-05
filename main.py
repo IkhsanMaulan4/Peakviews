@@ -3,6 +3,7 @@ import os
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,9 @@ from source_editor import run_source_editor
 from segment_editor import run_segment_editor
 from paths import app_dir
 from report import generate_report as build_report, NoDataError
+from web_api import WebContext
+from web_launcher import WebController
+from qr_dialog import WebDialog
 
 OUTPUT_DIR = app_dir() / "output"
 POLL_INTERVAL = 0.3  # seconds
@@ -43,6 +47,14 @@ class PeakViewApp:
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         self.session_file = OUTPUT_DIR / f"peak_{stamp}.txt"
         self.timeline = TimelineTracker(OUTPUT_DIR, stamp, self.active_sources)
+        self.web_ctx = WebContext(
+            session=self.session, store=self.store, timeline=self.timeline,
+            segments=SEGMENTS, sources=self.active_sources,
+            is_running=lambda: not self._stop.is_set(),
+            report_builder=self.build_report_file,
+        )
+        self.web = WebController(self.web_ctx)
+        self.web_dialog: WebDialog | None = None
 
         root.title("Peak View")
         root.attributes("-topmost", True)
@@ -83,6 +95,7 @@ class PeakViewApp:
         tk.Button(btn_frame, text="< Prev", width=7, command=self.prev_segment).grid(row=0, column=0, padx=2)
         tk.Button(btn_frame, text="Next >", width=7, command=self.next_segment).grid(row=0, column=1, padx=2)
         tk.Button(btn_frame, text="Reset Current", width=12, fg="red", command=self.reset_current).grid(row=0, column=2, padx=2)
+        tk.Button(btn_frame, text="Go to web", width=10, command=self.go_to_web).grid(row=0, column=3, padx=2)
 
         btn_frame2 = tk.Frame(self.root)
         btn_frame2.pack(**pad)
@@ -154,6 +167,29 @@ class PeakViewApp:
                 self.root.after(0, lambda msg=str(e): self.status.set(f"Capture err: {msg[:40]}"))
             self._stop.wait(POLL_INTERVAL)
 
+    def _set_active_sources(self, sources):
+        self.active_sources = sources
+        self.web_ctx.sources = sources  # web thread reads this reference
+
+    def go_to_web(self):
+        try:
+            self.web.ensure_started()
+        except OSError as e:
+            messagebox.showerror("Go to web", f"Server gagal start: {e}", parent=self.root)
+            self.status.set("Web: gagal start")
+            return
+        webbrowser.open(self.web.local_url())
+        if self.web_dialog is not None and self.web_dialog.winfo_exists():
+            self.web_dialog.refresh()
+            self.web_dialog.lift()
+        else:
+            self.web_dialog = WebDialog(self.root, self.web, on_stop=self._on_web_stopped)
+        self.status.set("Web berjalan")
+
+    def _on_web_stopped(self):
+        self.web_dialog = None
+        self.status.set("Web dihentikan")
+
     def next_segment(self):
         if not self.session.next():
             self.status.set("Sudah segment terakhir")
@@ -201,7 +237,7 @@ class PeakViewApp:
             pass
         if new_regions:
             self.regions = new_regions
-            self.active_sources = [s for s in SOURCES if s in new_regions]
+            self._set_active_sources([s for s in SOURCES if s in new_regions])
             for widget in self.live_frame.winfo_children():
                 widget.destroy()
             self.live_labels = {}
@@ -265,7 +301,7 @@ class PeakViewApp:
         self.store.reconfigure_sources(new_list, rename_map)
 
         # Rebuild live UI — same pattern as recalibrate.
-        self.active_sources = [s for s in new_list if s in new_regions]
+        self._set_active_sources([s for s in new_list if s in new_regions])
         self.live = {src: None for src in self.active_sources}
         self.timeline.set_sources(self.active_sources)
         for widget in self.live_frame.winfo_children():
@@ -352,11 +388,15 @@ class PeakViewApp:
         except Exception as e:
             self.status.set(f"Export err: {e}")
 
-    def generate_report(self):
-        stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    def build_report_file(self):
+        """Write the Excel report and return its path. Raises NoDataError. Thread-safe."""
+        stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         out_path = OUTPUT_DIR / f"laporan_peak_{stamp}.xlsx"
+        return build_report(self.store.snapshot(), list(SOURCES), list(SEGMENTS), out_path, self.timeline.path)
+
+    def generate_report(self):
         try:
-            path = build_report(self.store.peaks, SOURCES, SEGMENTS, out_path, self.timeline.path)
+            path = self.build_report_file()
         except NoDataError:
             messagebox.showinfo("Report", "Belum ada data peak buat di-report.", parent=self.root)
             self.status.set("Report: belum ada data")
@@ -395,6 +435,7 @@ class PeakViewApp:
 
     def _on_close(self):
         self._stop.set()
+        self.web.stop()
         self.root.destroy()
 
 
