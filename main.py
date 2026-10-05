@@ -356,7 +356,7 @@ class PeakViewApp:
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         out_path = OUTPUT_DIR / f"laporan_peak_{stamp}.xlsx"
         try:
-            path = build_report(self.store.peaks, SOURCES, SEGMENTS, out_path)
+            path = build_report(self.store.peaks, SOURCES, SEGMENTS, out_path, self.timeline.path)
         except NoDataError:
             messagebox.showinfo("Report", "Belum ada data peak buat di-report.", parent=self.root)
             self.status.set("Report: belum ada data")

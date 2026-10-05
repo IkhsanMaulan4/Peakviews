@@ -15,3 +15,4 @@ sources.json
 segments.json
 verify_report.py
 sample_report.xlsx
+sample_timeline.csv

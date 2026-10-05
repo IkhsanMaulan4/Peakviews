@@ -5,11 +5,12 @@ Tkinter, jadi bisa diuji standalone. Pakai openpyxl (tidak butuh Excel terinstal
 """
 from __future__ import annotations
 
+import csv
 from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.chart import BarChart, Reference, Series
+from openpyxl.chart import BarChart, LineChart, Reference, Series
 from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -22,6 +23,7 @@ TITLE_FONT = Font(bold=True, size=14)
 _THIN = Side(style="thin", color="999999")
 BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 NUM_FMT = "#,##0"  # Excel merender pemisah ribuan sesuai locale sistem.
+MAX_TIMELINE_POINTS = 5000  # di atas ini baris di-downsample supaya chart tetap ringan.
 
 
 def _name_value_labels(show_name: bool = True) -> DataLabelList:
@@ -62,8 +64,47 @@ def _segment_total(peaks: dict, sources: list, seg: str) -> int:
     return sum((row.get(src) or 0) for src in sources)
 
 
-def generate_report(peaks: dict, sources: list, segments: list, out_path) -> Path:
-    """Tulis laporan Excel ke out_path. Raise NoDataError bila semua segmen 0."""
+def _parse_timeline_row(record: list, n_sources: int):
+    """Satu baris CSV -> (datetime, segmen, [nilai|None]); None bila rusak."""
+    if len(record) < 2 + n_sources:
+        return None
+    try:
+        stamp = datetime.fromisoformat(record[0])
+        values = [int(v) if v.strip() else None for v in record[2:2 + n_sources]]
+    except ValueError:
+        return None
+    return stamp, record[1], values
+
+
+def _read_timeline(csv_path):
+    """Baca CSV timeline -> (sources, rows) dengan source kosong dibuang; None bila tak ada data."""
+    if csv_path is None:
+        return None
+    path = Path(csv_path)
+    if not path.is_file():
+        return None
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header or len(header) < 4:
+                return None
+            sources = header[2:-1]
+            rows = [r for r in (_parse_timeline_row(rec, len(sources)) for rec in reader) if r]
+    except (OSError, csv.Error):
+        return None
+
+    keep = [i for i in range(len(sources)) if any(row[2][i] is not None for row in rows)]
+    if not keep:
+        return None
+    step = -(-len(rows) // MAX_TIMELINE_POINTS)  # ceil
+    rows = [(ts, seg, [vals[i] for i in keep]) for ts, seg, vals in rows[::step]]
+    return [sources[i] for i in keep], rows
+
+
+def generate_report(peaks: dict, sources: list, segments: list, out_path, timeline_csv=None) -> Path:
+    """Tulis laporan Excel ke out_path. Raise NoDataError bila semua segmen 0.
+    timeline_csv (opsional): CSV dari TimelineTracker; bila ada data, ditambah tab Timeline."""
     out_path = Path(out_path)
     active_segments = _nonempty_segments(peaks, sources, segments)
     if not active_segments:
@@ -76,6 +117,10 @@ def generate_report(peaks: dict, sources: list, segments: list, out_path) -> Pat
 
     _build_summary(ws_sum, peaks, sources, active_segments)
     _build_detail(ws_detail, peaks, sources, active_segments)
+
+    timeline = _read_timeline(timeline_csv)
+    if timeline:
+        _build_timeline(wb.create_sheet("Timeline"), *timeline)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
@@ -223,3 +268,50 @@ def _build_detail(ws, peaks, sources, active_segments):
     chart.width = 24
     anchor = get_column_letter(total_col + 2)
     ws.add_chart(chart, f"{anchor}2")
+
+
+def _build_timeline(ws, sources, rows):
+    # --- Header + data ---
+    for col, name in enumerate(["Waktu", "Segmen", *sources], start=1):
+        c = ws.cell(row=1, column=col, value=name)
+        c.font = HEADER_FONT
+        c.fill = HEADER_FILL
+        c.border = BORDER
+        c.alignment = Alignment(horizontal="center")
+
+    for r, (stamp, segment, values) in enumerate(rows, start=2):
+        time_cell = ws.cell(row=r, column=1, value=stamp)
+        time_cell.number_format = "HH:MM:SS"
+        ws.cell(row=r, column=2, value=segment)
+        for c_idx, value in enumerate(values, start=3):
+            ws.cell(row=r, column=c_idx, value=value).number_format = NUM_FMT
+
+    last_row = 1 + len(rows)
+    last_col = 2 + len(sources)
+
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 30
+    for c_idx in range(3, last_col + 1):
+        ws.column_dimensions[get_column_letter(c_idx)].width = 12
+    ws.freeze_panes = "A2"
+
+    # --- Line chart: kurva penonton per source ---
+    chart = LineChart()
+    chart.title = "Kurva Penonton"
+    chart.y_axis.title = "Viewer"
+    chart.x_axis.title = "Waktu"
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.add_data(Reference(ws, min_col=3, max_col=last_col, min_row=1, max_row=last_row),
+                   titles_from_data=True)
+    chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=last_row))
+    skip = max(1, len(rows) // 10)
+    chart.x_axis.tickLblSkip = skip
+    chart.x_axis.tickMarkSkip = skip
+    chart.dispBlanksAs = "gap"  # periode OCR gagal tampil bolong, bukan garis palsu
+    for series in chart.series:
+        series.smooth = False
+        series.marker.symbol = "none"
+    chart.height = 10
+    chart.width = 28
+    ws.add_chart(chart, f"{get_column_letter(last_col + 2)}2")
