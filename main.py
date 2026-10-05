@@ -1,4 +1,5 @@
 """Main GUI - always-on-top window dengan tombol Next/Prev/Recalibrate/Export."""
+import os
 import threading
 import time
 import tkinter as tk
@@ -19,6 +20,7 @@ from calibration import load_calibration, run_calibration, run_edit_calibration,
 from source_editor import run_source_editor
 from segment_editor import run_segment_editor
 from paths import app_dir
+from report import generate_report as build_report, NoDataError
 
 OUTPUT_DIR = app_dir() / "output"
 POLL_INTERVAL = 0.3  # seconds
@@ -42,7 +44,7 @@ class PeakViewApp:
 
         root.title("Peak View")
         root.attributes("-topmost", True)
-        root.geometry("460x360+1000+50")
+        root.geometry("540x360+1000+50")
         root.resizable(False, False)
 
         self._build_ui()
@@ -88,6 +90,7 @@ class PeakViewApp:
         tk.Button(btn_frame2, text="Segments", width=8, command=self.edit_segments).grid(row=0, column=3, padx=2)
         tk.Button(btn_frame2, text="Export TXT", width=9, command=self.export).grid(row=0, column=4, padx=2)
         tk.Button(btn_frame2, text="Debug", width=6, command=self.toggle_debug).grid(row=0, column=5, padx=2)
+        tk.Button(btn_frame2, text="Report", width=7, command=self.generate_report).grid(row=0, column=6, padx=2)
 
         tk.Label(self.root, textvariable=self.status, fg="gray", font=("Arial", 8)).pack(side="bottom", pady=2)
 
@@ -348,6 +351,26 @@ class PeakViewApp:
             self.status.set(f"Saved: {path.name}")
         except Exception as e:
             self.status.set(f"Export err: {e}")
+
+    def generate_report(self):
+        stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+        out_path = OUTPUT_DIR / f"laporan_peak_{stamp}.xlsx"
+        try:
+            path = build_report(self.store.peaks, SOURCES, SEGMENTS, out_path)
+        except NoDataError:
+            messagebox.showinfo("Report", "Belum ada data peak buat di-report.", parent=self.root)
+            self.status.set("Report: belum ada data")
+            return
+        except Exception as e:
+            messagebox.showerror("Report gagal", str(e), parent=self.root)
+            self.status.set(f"Report err: {e}")
+            return
+        self.status.set(f"Report: {path.name}")
+        if messagebox.askyesno("Report selesai", f"Tersimpan:\n{path}\n\nBuka sekarang?", parent=self.root):
+            try:
+                os.startfile(path)
+            except Exception:
+                pass
 
     def toggle_debug(self):
         if self.debug_window is not None:
