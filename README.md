@@ -4,20 +4,16 @@ Deteksi peak viewer dari 4 live stream (BOG-YT, BOG-TT, MPL ID-YT, MPL ID-TT) le
 
 ## Setup
 
-### 1. Install Tesseract OCR (Windows)
-Download installer: https://github.com/UB-Mannheim/tesseract/wiki
-Default install path biasanya `C:\Program Files\Tesseract-OCR\tesseract.exe`. Pastikan path ini masuk ke PATH environment variable, atau set manual di `capture.py`:
+OCR memakai RapidOCR (ONNX) yang ikut ter-install lewat pip, jadi tidak perlu install engine OCR terpisah.
 
-```python
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-```
-
-### 2. Install Python dependencies
+### 1. Install Python dependencies
 ```powershell
 pip install -r requirements.txt
 ```
 
-### 3. Jalankan
+Atau jalankan `setup.bat` untuk membuat venv otomatis (`run.bat` untuk menjalankan app).
+
+### 2. Jalankan
 ```powershell
 python main.py
 ```

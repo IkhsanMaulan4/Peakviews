@@ -39,6 +39,19 @@ def _name_value_labels(show_name: bool = True) -> DataLabelList:
     return labels
 
 
+def _tidy_chart(chart, top_value, headroom, legend_position=None):
+    """Cegah teks chart saling tabrak: judul/legend tidak menimpa area plot, dan
+    sumbu nilai diberi ruang kosong di atas supaya label bar tertinggi tidak
+    mentok ke judul."""
+    chart.title.overlay = False
+    if chart.legend is not None:
+        chart.legend.overlay = False
+        if legend_position:
+            chart.legend.position = legend_position
+    chart.y_axis.scaling.min = 0
+    chart.y_axis.scaling.max = max(1, top_value) * headroom
+
+
 class NoDataError(Exception):
     """Diraise saat tidak ada data peak > 0 yang bisa dilaporkan."""
 
@@ -202,7 +215,6 @@ def _build_summary(ws, peaks, sources, active_segments):
     chart = BarChart()
     chart.type = "col"
     chart.title = "Total Peak per Channel"
-    chart.y_axis.title = "Total Peak"
     chart.y_axis.delete = False
     chart.x_axis.delete = True  # nama channel sudah ada di label bar + legend
     for i, src in enumerate(sources, start=1):
@@ -211,6 +223,7 @@ def _build_summary(ws, peaks, sources, active_segments):
         chart.series.append(series)
     chart.height = 9
     chart.width = 16
+    _tidy_chart(chart, max(channel_totals.values()), 1.25)
     ws.add_chart(chart, "E5")
 
 
@@ -266,6 +279,8 @@ def _build_detail(ws, peaks, sources, active_segments):
     chart.dataLabels = _name_value_labels(show_name=False)
     chart.height = max(10, len(active_segments) * 0.9)
     chart.width = 24
+    top_total = max(_segment_total(peaks, sources, seg) for seg in active_segments)
+    _tidy_chart(chart, top_total, 1.2)
     anchor = get_column_letter(total_col + 2)
     ws.add_chart(chart, f"{anchor}2")
 
@@ -314,4 +329,6 @@ def _build_timeline(ws, sources, rows):
         series.marker.symbol = "none"
     chart.height = 10
     chart.width = 28
+    top_value = max(v for _, _, values in rows for v in values if v is not None)
+    _tidy_chart(chart, top_value, 1.1, legend_position="b")
     ws.add_chart(chart, f"{get_column_letter(last_col + 2)}2")
