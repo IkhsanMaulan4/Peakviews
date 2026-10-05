@@ -21,6 +21,7 @@ SPIKE_CONFIRMS = 3
 LOG_INTERVAL = 5.0   # seconds between CSV rows
 WARN_AFTER = 5.0     # seconds without a valid read -> yellow
 ERROR_AFTER = 15.0   # seconds without a valid read -> red
+HISTORY_MAX = 4000   # in-memory points for the live chart (~5.5h at LOG_INTERVAL)
 
 FLAG_OK = "ok"
 FLAG_HELD = "held"   # raw read rejected, last accepted value reused
@@ -38,6 +39,11 @@ class SeriesCleaner:
         self._buffer = deque(maxlen=BUFFER_SIZE)
         self._last = None
         self._pending = None  # {"value": int, "count": int}
+
+    @property
+    def last(self):
+        """Last accepted (cleaned) value, or None before the buffer has warmed up."""
+        return self._last
 
     def push(self, value):
         """Returns (accepted_value_or_None, flag)."""
@@ -94,6 +100,8 @@ class TimelineTracker:
         self._path = None
         self._needs_header = False
         self._last_write = 0.0
+        self._history = deque(maxlen=HISTORY_MAX)
+        self._next_seq = 0
         self._set_sources_locked(sources, time.monotonic())
 
     @property
@@ -109,6 +117,7 @@ class TimelineTracker:
         self._cleaners = {src: SeriesCleaner() for src in self._sources}
         self._last_ok = {src: now for src in self._sources}
         self._path = None  # next write opens a fresh file with a matching header
+        self._history.clear()
 
     def feed(self, segment: str, raw: dict):
         mono = time.monotonic()
@@ -121,14 +130,44 @@ class TimelineTracker:
                 readings[src] = self._cleaners[src].push(value)
             if mono - self._last_write >= LOG_INTERVAL:
                 self._last_write = mono
+                self._record_history(segment, readings)
                 self._write_row(segment, readings)
+
+    def latest(self) -> dict:
+        """{source: cleaned viewer count or None} - anti-spike filtered, not raw OCR."""
+        with self._lock:
+            return {src: self._cleaners[src].last for src in self._sources}
+
+    def statuses(self) -> dict:
+        with self._lock:
+            now = time.monotonic()
+            return {src: self._status_at(self._last_ok.get(src), now) for src in self._sources}
+
+    def history(self, since: int = 0):
+        """Points with seq >= since, plus the seq to pass next time."""
+        with self._lock:
+            points = [p for p in self._history if p["seq"] >= since]
+            return points, self._next_seq
+
+    def _record_history(self, segment, readings):
+        self._history.append({
+            "seq": self._next_seq,
+            "t": time.time(),
+            "segment": segment,
+            "values": {src: readings[src][0] for src in self._sources},
+        })
+        self._next_seq += 1
 
     def status(self, src: str) -> str:
         with self._lock:
             last_ok = self._last_ok.get(src)
+        return self._status_at(last_ok, time.monotonic())
+
+    @staticmethod
+    def _status_at(last_ok, now) -> str:
         if last_ok is None:
             return STATUS_OK
-        silent = time.monotonic() - last_ok
+        silent = now - last_ok
         if silent >= ERROR_AFTER:
             return STATUS_ERROR
         if silent >= WARN_AFTER:

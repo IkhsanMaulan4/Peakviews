@@ -1,5 +1,6 @@
 """In-memory peak tracker + TSV export."""
 import statistics
+import threading
 from collections import deque
 from pathlib import Path
 from datetime import datetime
@@ -21,6 +22,8 @@ class PeakStore:
     SPIKE_CONFIRMS = 3
 
     def __init__(self):
+        # Capture thread, GUI editors and the web server all touch these dicts.
+        self._lock = threading.RLock()
         # {segment: {label: int}}
         self.peaks = {seg: {src: 0 for src in SOURCES} for seg in SEGMENTS}
         # Per-source rolling buffer of recent OCR reads (shared across segments —
@@ -31,6 +34,15 @@ class PeakStore:
         self._pending = {seg: {src: None for src in SOURCES} for seg in SEGMENTS}
 
     def update(self, segment: str, label: str, value):
+        with self._lock:
+            self._update_locked(segment, label, value)
+
+    def snapshot(self) -> dict:
+        """Deep copy of {segment: {source: peak}} safe to read from any thread."""
+        with self._lock:
+            return {seg: dict(vals) for seg, vals in self.peaks.items()}
+
+    def _update_locked(self, segment: str, label: str, value):
         if value is None or value <= 0:
             return
         # Guard: segment may be mid-removal by the editor while capture thread runs.
@@ -72,14 +84,20 @@ class PeakStore:
         self._pending[segment][label] = None
 
     def get_current(self, segment: str) -> dict:
-        return dict(self.peaks[segment])
+        with self._lock:
+            return dict(self.peaks[segment])
 
     def reset_segment(self, segment: str):
-        if segment in self.peaks:
-            self.peaks[segment] = {src: 0 for src in SOURCES}
-            self._pending[segment] = {src: None for src in SOURCES}
+        with self._lock:
+            if segment in self.peaks:
+                self.peaks[segment] = {src: 0 for src in SOURCES}
+                self._pending[segment] = {src: None for src in SOURCES}
 
     def reconfigure_segments(self, new_segments: list, rename_map: dict | None = None):
+        with self._lock:
+            self._reconfigure_segments_locked(new_segments, rename_map)
+
+    def _reconfigure_segments_locked(self, new_segments: list, rename_map: dict | None = None):
         """Reshape segment-keyed structures to match new_segments.
         rename_map: {old_segment: new_segment} — preserves peak/pending state
         across renames. Removed segments are dropped; brand-new segments start at 0.
@@ -102,6 +120,10 @@ class PeakStore:
         self._pending = new_pending
 
     def reconfigure_sources(self, new_sources: list, rename_map: dict | None = None):
+        with self._lock:
+            self._reconfigure_sources_locked(new_sources, rename_map)
+
+    def _reconfigure_sources_locked(self, new_sources: list, rename_map: dict | None = None):
         """Reshape internal source-keyed structures to match new_sources.
         rename_map: {old_label: new_label} — preserves recent/peak/pending state
         across renames. Removed sources are dropped; brand-new sources start at 0.
