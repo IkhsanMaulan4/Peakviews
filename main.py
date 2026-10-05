@@ -12,6 +12,7 @@ from segments import (
     reload_sources, save_sources,
     reload_segments, save_segments,
 )
+from session import SessionState
 from storage import PeakStore
 from timeline import TimelineTracker, STATUS_WARN, STATUS_ERROR
 from capture import capture_all, capture_all_with_debug
@@ -32,7 +33,8 @@ class PeakViewApp:
         self.regions = regions
         self.active_sources = [s for s in SOURCES if s in regions]
         self.store = PeakStore()
-        self.seg_index = 0
+        self.session = SessionState(SEGMENTS)
+        self.session.subscribe(self._on_segment_changed_threadsafe)
         self.live = {src: None for src in self.active_sources}
         self.debug_window: OcrDebugWindow | None = None
         self.status = tk.StringVar(value="Ready")
@@ -95,8 +97,9 @@ class PeakViewApp:
         tk.Label(self.root, textvariable=self.status, fg="gray", font=("Arial", 8)).pack(side="bottom", pady=2)
 
     def _render(self):
-        seg = SEGMENTS[self.seg_index]
-        self.seg_label.config(text=f"[{self.seg_index + 1}/{len(SEGMENTS)}] {seg}")
+        index = self.session.index
+        seg = SEGMENTS[index]
+        self.seg_label.config(text=f"[{index + 1}/{len(SEGMENTS)}] {seg}")
         default_bg = self.root.cget("bg")
         for src, lbl in self.live_labels.items():
             val = self.live.get(src)
@@ -138,7 +141,7 @@ class PeakViewApp:
                 else:
                     results = capture_all(self.regions)
                 self.live = results
-                seg = SEGMENTS[self.seg_index]
+                seg = self.session.current_name()
                 self.timeline.feed(seg, results)
                 for label, val in results.items():
                     self.store.update(seg, label, val)
@@ -152,25 +155,27 @@ class PeakViewApp:
             self._stop.wait(POLL_INTERVAL)
 
     def next_segment(self):
-        if self.seg_index < len(SEGMENTS) - 1:
-            self.seg_index += 1
-            self.status.set(f"-> {SEGMENTS[self.seg_index]}")
-            self._render()
-            self._auto_save()
-        else:
+        if not self.session.next():
             self.status.set("Sudah segment terakhir")
 
     def prev_segment(self):
-        if self.seg_index > 0:
-            self.seg_index -= 1
-            self.status.set(f"<- {SEGMENTS[self.seg_index]}")
-            self._render()
-            self._auto_save()
-        else:
+        if not self.session.prev():
             self.status.set("Sudah segment pertama")
 
+    def _on_segment_changed_threadsafe(self, index, name):
+        # May fire from the web server thread: Tk must only be touched via after().
+        try:
+            self.root.after(0, lambda: self._on_segment_changed(name))
+        except (tk.TclError, RuntimeError):
+            pass  # window already closing
+
+    def _on_segment_changed(self, name):
+        self.status.set(f"-> {name}")
+        self._render()
+        self._auto_save()
+
     def reset_current(self):
-        seg = SEGMENTS[self.seg_index]
+        seg = self.session.current_name()
         self.store.reset_segment(seg)
         self.status.set(f"Peak '{seg}' di-reset ke 0")
         self._render()
@@ -290,7 +295,7 @@ class PeakViewApp:
 
     def edit_segments(self):
         old_segments = list(SEGMENTS)
-        current_seg = old_segments[self.seg_index]
+        current_seg = self.session.current_name()
 
         result = run_segment_editor(self.root, old_segments)
         if result is None:
@@ -323,18 +328,13 @@ class PeakViewApp:
                 self.status.set("Edit segments dibatalkan (data dipertahankan)")
                 return
 
-        # Compute new seg_index BEFORE mutating SEGMENTS — capture thread
-        # reads SEGMENTS[seg_index] each cycle and would IndexError if the
-        # list shrinks while seg_index still points past the new end.
+        # SessionState clamps its index on every read, so the capture/web
+        # threads stay safe while SEGMENTS is swapped in place.
         new_current_seg = rename_map.get(current_seg, current_seg)
-        if new_current_seg in new_list:
-            new_seg_index = new_list.index(new_current_seg)
-        else:
-            new_seg_index = min(self.seg_index, len(new_list) - 1)
 
         save_segments(new_list)
-        self.seg_index = new_seg_index
         reload_segments()
+        self.session.sync_to(new_current_seg)
         self.store.reconfigure_segments(new_list, rename_map)
 
         self._render()
