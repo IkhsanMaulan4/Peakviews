@@ -264,3 +264,92 @@ def test_url_uses_given_host_and_token(server):
 
 def test_lan_ip_returns_an_address():
     assert lan_ip().count(".") == 3
+
+
+# --- hardening (security review) -------------------------------------------
+
+def test_foreign_host_header_rejected(server):
+    status, _, _ = req(server, "/api/state", headers={"Host": "evil.example.com"})
+    assert status == 403
+
+
+def test_ip_and_localhost_host_headers_accepted(server):
+    assert req(server, "/api/state", headers={"Host": f"192.168.1.5:{server.port}"})[0] == 200
+    assert req(server, "/api/state", headers={"Host": f"localhost:{server.port}"})[0] == 200
+
+
+def test_content_type_must_be_exactly_json(server):
+    status, _, _ = req(
+        server, "/api/segment", "POST", b'{"name":"TVC"}',
+        headers={"Content-Type": "application/jsonfoo"},
+    )
+    assert status == 415
+    status, _, _ = req(
+        server, "/api/segment", "POST", b'{"name":"TVC"}',
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    assert status == 200
+
+
+def test_non_web_extensions_not_served(server, web_dir):
+    (web_dir / "notes.py").write_text("print(1)", encoding="utf-8")
+    assert req(server, "/notes.py", raw=True)[0] == 404
+
+
+def test_report_with_non_ascii_filename(tmp_path, monkeypatch, web_dir):
+    out = tmp_path / "laporan_é世界.xlsx"
+    out.write_bytes(b"PK")
+    srv = _server_with_report(tmp_path, monkeypatch, web_dir, lambda: out)
+    try:
+        status, body, hdrs = req(srv, "/api/report.xlsx", raw=True)
+        assert status == 200 and body == b"PK"
+        assert 'filename="' in hdrs["Content-Disposition"]
+        hdrs["Content-Disposition"].encode("ascii")
+    finally:
+        srv.stop()
+
+
+def test_security_headers_present(server):
+    _, _, hdrs = req(server, "/api/state")
+    assert hdrs["Referrer-Policy"] == "no-referrer"
+    assert hdrs["X-Frame-Options"] == "DENY"
+
+
+def test_cookie_has_max_age(server):
+    _, _, hdrs = req(server, f"/?t={server.token}", token=None)
+    assert "Max-Age=" in hdrs["Set-Cookie"]
+
+
+def test_idle_connection_is_dropped(tmp_path, monkeypatch, web_dir):
+    import socket
+    import webserver
+    monkeypatch.setattr(webserver, "REQUEST_TIMEOUT", 0.3)
+    srv = WebServer(make_context(tmp_path, monkeypatch), web_dir, host="127.0.0.1")
+    srv.start()
+    try:
+        sock = socket.create_connection(("127.0.0.1", srv.port), timeout=3)
+        sock.sendall(b"GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\n")  # never finishes
+        assert sock.recv(1024) == b""  # server closed it instead of waiting forever
+        sock.close()
+    finally:
+        srv.stop()
+
+
+def test_connection_cap_sheds_excess_but_recovers(tmp_path, monkeypatch, web_dir):
+    import socket
+    import webserver
+    monkeypatch.setattr(webserver, "MAX_CONNECTIONS", 3)
+    monkeypatch.setattr(webserver, "REQUEST_TIMEOUT", 0.5)
+    srv = WebServer(make_context(tmp_path, monkeypatch), web_dir, host="127.0.0.1")
+    srv.start()
+    socks = []
+    try:
+        for _ in range(6):
+            socks.append(socket.create_connection(("127.0.0.1", srv.port), timeout=3))
+        import time
+        time.sleep(1.0)  # idle ones time out and free their slots
+        assert req(srv, "/api/state")[0] == 200
+    finally:
+        for s in socks:
+            s.close()
+        srv.stop()

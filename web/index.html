@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<title>PeakView</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span id="run-dot" class="dot" title="Status capture"></span>PeakView</div>
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" data-tab="control" aria-selected="true">Kontrol</button>
+    <button class="tab" role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
+  </nav>
+  <div id="conn" class="conn" role="status">menghubungkan…</div>
+</header>
+
+<main>
+  <section id="tab-control" class="panel" role="tabpanel">
+    <div class="now">
+      <div class="now-meta"><span id="now-group" class="tag">-</span><span id="now-pos">- / -</span></div>
+      <h1 id="now-name">-</h1>
+    </div>
+    <div class="steppers">
+      <button id="btn-prev" class="step" type="button">&lsaquo; Prev</button>
+      <button id="btn-next" class="step primary" type="button">Next &rsaquo;</button>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <h2>Viewer</h2>
+    <ul id="viewer-list" class="viewers"></ul>
+    <h2>Semua segmen</h2>
+    <div id="segment-groups"></div>
+  </section>
+
+  <section id="tab-dashboard" class="panel" role="tabpanel" hidden>
+    <div class="dash-head">
+      <h1 id="dash-segment">-</h1>
+      <button id="btn-report" class="btn" type="button">Download Excel</button>
+    </div>
+    <div id="cards" class="cards"></div>
+    <div class="chart-wrap"><canvas id="chart" aria-label="Grafik viewer per source"></canvas></div>
+    <h2>Peak per segmen</h2>
+    <div class="table-wrap"><table id="summary"></table></div>
+  </section>
+</main>
+
+<script src="/vendor/chart.umd.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

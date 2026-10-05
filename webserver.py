@@ -1,13 +1,15 @@
 """Token-protected local HTTP server for the PeakView web UI (stdlib only)."""
 import hmac
+import ipaddress
 import json
+import re
 import secrets
 import socket
 import threading
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from report import NoDataError
 from web_api import (
@@ -15,6 +17,9 @@ from web_api import (
 )
 
 MAX_BODY = 1024
+REQUEST_TIMEOUT = 10.0     # seconds a client may stall mid-request (slowloris)
+MAX_CONNECTIONS = 32       # concurrent handler threads before new sockets are shed
+COOKIE_MAX_AGE = 8 * 3600  # a stolen cookie stops working after a work day
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # Explicit table: Windows' registry-backed mimetypes can mislabel .js as text/plain.
 MIME = {
@@ -43,6 +48,24 @@ def lan_ip() -> str:
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
+    allow_reuse_address = False   # on Windows this would permit port sharing
+    request_queue_size = 16
+
+    def __init__(self, *args, **kwargs):
+        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)  # shed load instead of piling up threads
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     def handle_error(self, request, client_address):
         pass  # windowed exe has no stderr; a dropped client must not crash a worker
@@ -98,6 +121,7 @@ def _make_handler(web: WebServer):
     class Handler(BaseHTTPRequestHandler):
         server_version = "PeakView"
         sys_version = ""
+        timeout = REQUEST_TIMEOUT
 
         def log_message(self, fmt, *args):
             pass  # never log URLs: they may carry the token
@@ -109,12 +133,17 @@ def _make_handler(web: WebServer):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", CSP)
+            self._security_headers()
             for key, value in (extra or {}).items():
                 self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
+
+        def _security_headers(self):
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
 
         def _json(self, status, payload):
             self._send(status, json.dumps(payload).encode("utf-8"), MIME[".json"])
@@ -123,6 +152,21 @@ def _make_handler(web: WebServer):
             self._json(status, {"error": code})
 
         # --- auth ---------------------------------------------------------
+
+        def _host_ok(self) -> bool:
+            """Only IP literals and localhost: a rebound attacker hostname fails here."""
+            host = (self.headers.get("Host") or "").strip()
+            if host.startswith("["):
+                host = host[1:].split("]")[0]
+            else:
+                host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+            if host.lower() == "localhost":
+                return True
+            try:
+                ipaddress.ip_address(host)
+                return True
+            except ValueError:
+                return False
 
         def _token_ok(self, candidate) -> bool:
             return bool(candidate) and hmac.compare_digest(candidate.encode(), web.token.encode())
@@ -144,12 +188,16 @@ def _make_handler(web: WebServer):
 
         def do_GET(self):
             try:
+                if not self._host_ok():
+                    return self._error(403, "forbidden")
                 self._route_get()
             except Exception:
                 self._error(500, "server_error")
 
         def do_POST(self):
             try:
+                if not self._host_ok():
+                    return self._error(403, "forbidden")
                 self._route_post()
             except Exception:
                 self._error(500, "server_error")
@@ -195,15 +243,18 @@ def _make_handler(web: WebServer):
             self.send_header("Location", "/")
             self.send_header(
                 "Set-Cookie",
-                f"{cookie_name()}={web.token}; Path=/; HttpOnly; SameSite=Strict",
+                f"{cookie_name()}={web.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={COOKIE_MAX_AGE}",
             )
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
             self.end_headers()
             return True
 
         def _read_json(self):
-            if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
+            ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._drain_small_body()
                 self._error(415, "unsupported_media_type")
                 return _REJECTED
             try:
@@ -224,6 +275,15 @@ def _make_handler(web: WebServer):
                 self._error(400, "bad_json")
                 return _REJECTED
 
+        def _drain_small_body(self):
+            """Read an already-sent small body so closing doesn't RST the client's response."""
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                return
+            if 0 < length <= MAX_BODY:
+                self.rfile.read(length)
+
         def _send_static(self, path):
             if "\\" in path or "\x00" in path:
                 return self._error(404, "not_found")
@@ -235,7 +295,9 @@ def _make_handler(web: WebServer):
                 return self._error(403, "forbidden")
             if not target.is_file():
                 return self._error(404, "not_found")
-            ctype = MIME.get(target.suffix.lower(), "application/octet-stream")
+            ctype = MIME.get(target.suffix.lower())
+            if ctype is None:
+                return self._error(404, "not_found")  # only known web asset types
             self._send(200, target.read_bytes(), ctype)
 
         def _send_report(self):
@@ -251,13 +313,19 @@ def _make_handler(web: WebServer):
                     return self._error(500, "report_failed")
                 data = path.read_bytes()
             self._send(200, data, XLSX_MIME, {
-                "Content-Disposition": f'attachment; filename="{path.name}"',
+                "Content-Disposition": _disposition(path.name),
             })
 
     return Handler
 
 
 _REJECTED = object()
+
+
+def _disposition(filename: str) -> str:
+    """ASCII-safe filename plus an RFC 5987 UTF-8 variant (headers must be latin-1)."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", filename)
+    return f"attachment; filename=\"{safe}\"; filename*=UTF-8''{quote(filename)}"
 
 
 def _since(query: str) -> int:
