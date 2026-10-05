@@ -4,3 +4,4 @@ Pillow>=10.0.0
 numpy>=1.26
 pyinstaller>=6.0
 openpyxl>=3.1
+segno>=1.6

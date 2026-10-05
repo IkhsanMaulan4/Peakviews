@@ -72,6 +72,20 @@ Tombol **Report** membuat `output/laporan_peak_YYYY-MM-DD_HHMM.xlsx` dari peak y
 - Label source di window berubah **kuning** kalau 5 detik tanpa bacaan valid dan **merah** setelah 15 detik (stream mati, window tertutup, atau kotak kalibrasi geser). Kembali normal otomatis saat bacaan pulih.
 - Kalau source diubah atau recalibrate di tengah event, CSV baru (`..._2.csv`) dimulai; Report memakai CSV terbaru.
 
+## Web lokal (Go to web)
+
+Tombol **Go to web** menjalankan server kecil di dalam PeakView (tanpa internet, tanpa install tambahan), membuka dashboard di browser laptop, dan menampilkan **QR code** untuk HP.
+
+- **Tab Kontrol** (otomatis di HP): segmen aktif, tombol Prev/Next besar, daftar segmen yang bisa di-tap, viewer per source + indikator OCR. Ganti segmen dari HP langsung mengubah GUI, dan sebaliknya.
+- **Tab Dashboard** (laptop): kartu viewer & peak, grafik timeline live dengan penanda ganti segmen, tabel peak per segmen, tombol **Download Excel**.
+- Port dipilih otomatis oleh OS, jadi tidak bentrok dengan program lain atau instance lain.
+- Akses dilindungi **token acak per sesi** (ada di URL/QR). Request tanpa token ditolak. Token berganti setiap server dijalankan ulang.
+- HP dan laptop harus di WiFi yang sama. Saat Windows Firewall bertanya, pilih **Private**. Kalau WiFi memblokir antar-perangkat, pakai hotspot HP.
+- Koneksi memakai HTTP biasa (tanpa enkripsi): pakai di jaringan yang dipercaya, jangan bagikan URL/QR, dan tekan **Stop server** di dialog setelah selesai. Hilangkan centang "Akses dari HP" untuk membatasi ke laptop saja.
+- Web hanya bisa **ganti segmen dan membaca data**. Kalibrasi, edit source/segment, reset, dan start/stop tetap lewat GUI.
+
+Tes otomatis: `peakview-env\Scripts\python -m pip install -r requirements-dev.txt`, lalu `peakview-env\Scripts\python -m pytest`.
+
 ## Catatan
 
 - Kalau angka viewer salah ke-OCR (misal "1.2K" malah jadi 12), recalibrate dan pastikan kotak benar-benar pas dengan angka (jangan ada ikon mata atau teks lain di dalam kotak).

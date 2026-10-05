@@ -26,8 +26,8 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=_rapidocr_binaries,
-    datas=_rapidocr_datas,
-    hiddenimports=['PIL._tkinter_finder', 'PIL.ImageTk', *_rapidocr_hidden, *_openpyxl_hidden],
+    datas=[*_rapidocr_datas, ('web', 'web')],  # local web UI (html/js/css + Chart.js)
+    hiddenimports=['PIL._tkinter_finder', 'PIL.ImageTk', 'segno', *_rapidocr_hidden, *_openpyxl_hidden],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
