@@ -1,6 +1,7 @@
 """Small dialog showing the web URL + QR code for phones."""
 import tkinter as tk
 import webbrowser
+from tkinter import messagebox
 
 from PIL import ImageTk
 
@@ -10,10 +11,13 @@ QR_SCALE = 5
 
 
 class WebDialog(tk.Toplevel):
-    def __init__(self, root: tk.Tk, controller: WebController, on_stop):
+    def __init__(self, root: tk.Tk, controller: WebController, on_stop, on_hide):
+        """on_stop: server was stopped here. on_hide: dialog closed via X, server keeps running."""
         super().__init__(root)
         self._controller = controller
         self._on_stop = on_stop
+        self._on_hide = on_hide
+        self.protocol("WM_DELETE_WINDOW", self._hide)
         self._photo = None
         self._lan_var = tk.BooleanVar(value=controller.lan)
 
@@ -54,7 +58,13 @@ class WebDialog(tk.Toplevel):
         self._qr_label.config(image=self._photo)
 
     def _toggle_lan(self) -> None:
-        self._controller.set_lan(self._lan_var.get())
+        try:
+            self._controller.set_lan(self._lan_var.get())
+        except OSError as e:
+            messagebox.showerror("Go to web", f"Server gagal start ulang: {e}", parent=self)
+            self._on_stop()
+            self.destroy()
+            return
         self.refresh()
 
     def _open(self) -> None:
@@ -65,6 +75,10 @@ class WebDialog(tk.Toplevel):
     def _copy(self) -> None:
         self.clipboard_clear()
         self.clipboard_append(self._url_var.get())
+
+    def _hide(self) -> None:
+        self._on_hide()
+        self.destroy()
 
     def _stop(self) -> None:
         self._controller.stop()

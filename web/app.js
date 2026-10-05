@@ -108,6 +108,7 @@
     renderViewers(s);
     renderSegments(s);
     renderCards(s);
+    if (activeTab === "dashboard") ensureChart();
   }
 
   function healthDot(status) {
@@ -182,6 +183,7 @@
       if (!res.ok) throw new Error("http " + res.status);
       return res.json();
     }).then(function (data) {
+      toast("");
       renderState(data.state);
     }).catch(function (err) {
       if (err.message !== "forbidden") toast("Gagal ganti segmen", true);
@@ -284,6 +286,7 @@
 
   function applyTimeline(data) {
     if (!chart || !state) return;
+    if (data.sources.join("|") !== lastSources) return;  // stale response from before a source edit
     nextSeq = data.next;
     if (!data.points.length) return;
     points = points.concat(data.points);
@@ -337,16 +340,21 @@
 
   function pollTimeline() {
     if (activeTab !== "dashboard" || !chart) return;
-    getJson("/api/timeline?since=" + nextSeq).then(applyTimeline).catch(function () {});
+    return getJson("/api/timeline?since=" + nextSeq).then(applyTimeline).catch(function () {});
   }
 
   function pollSummary() {
     if (activeTab !== "dashboard") return;
-    getJson("/api/summary").then(renderSummary).catch(function () {});
+    return getJson("/api/summary").then(renderSummary).catch(function () {});
   }
 
   function every(ms, fn) {
-    setInterval(function () { if (!document.hidden) fn(); }, ms);
+    var busy = false;
+    setInterval(function () {
+      if (document.hidden || busy) return;
+      busy = true;
+      Promise.resolve(fn()).catch(function () {}).then(function () { busy = false; });
+    }, ms);
   }
 
   function init() {

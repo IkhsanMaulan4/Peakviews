@@ -119,3 +119,43 @@ def test_subscriber_may_read_state_without_deadlock(state):
     state.subscribe(lambda idx, name: seen.append(state.index))
     state.next()
     assert seen == [1]
+
+
+def test_subscriber_runs_outside_the_lock(state):
+    """A subscriber that waits on another thread reading state must not deadlock
+    (the real app's subscriber blocks on Tk's main thread, which reads state)."""
+    done = []
+
+    def sub(idx, name):
+        reader = threading.Thread(target=lambda: done.append(state.index))
+        reader.start()
+        reader.join(timeout=2)
+
+    state.subscribe(sub)
+    state.next()
+    assert done == [1]
+
+
+def test_snapshot_returns_consistent_index_and_name(state):
+    state.set_index(2)
+    assert state.snapshot() == (2, "C")
+
+
+def test_snapshot_empty_list():
+    assert SessionState([]).snapshot() == (0, None)
+
+
+def test_apply_edit_mutates_and_resyncs_atomically(segs, state):
+    state.set_by_name("C")
+
+    def mutate():
+        segs[:] = ["X", "C", "A"]
+
+    state.apply_edit(mutate, "C")
+    assert state.snapshot() == (1, "C")
+
+
+def test_apply_edit_falls_back_to_clamped_index(segs, state):
+    state.set_index(2)
+    state.apply_edit(lambda: segs.__setitem__(slice(None), ["A"]), "gone")
+    assert state.snapshot() == (0, "A")

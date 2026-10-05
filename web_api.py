@@ -27,8 +27,7 @@ def group_of(name: str) -> str:
 
 def build_state(ctx: WebContext) -> dict:
     segments = list(ctx.segments)
-    index = ctx.session.index
-    name = ctx.session.current_name()
+    index, name = ctx.session.snapshot()
     peaks = ctx.store.snapshot().get(name, {})
     viewers = ctx.timeline.latest()
     health = ctx.timeline.statuses()
@@ -49,7 +48,8 @@ def build_summary(ctx: WebContext) -> dict:
     peaks = ctx.store.snapshot()
     sources = list(ctx.sources)
     rows = []
-    for seg in _nonempty_segments(peaks, sources, list(ctx.segments)):
+    known = [s for s in ctx.segments if s in peaks]  # list is swapped before the store
+    for seg in _nonempty_segments(peaks, sources, known):
         rows.append({
             "name": seg,
             "peaks": {src: peaks[seg].get(src, 0) for src in sources},

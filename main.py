@@ -95,7 +95,8 @@ class PeakViewApp:
         tk.Button(btn_frame, text="< Prev", width=7, command=self.prev_segment).grid(row=0, column=0, padx=2)
         tk.Button(btn_frame, text="Next >", width=7, command=self.next_segment).grid(row=0, column=1, padx=2)
         tk.Button(btn_frame, text="Reset Current", width=12, fg="red", command=self.reset_current).grid(row=0, column=2, padx=2)
-        tk.Button(btn_frame, text="Go to web", width=10, command=self.go_to_web).grid(row=0, column=3, padx=2)
+        self.web_button = tk.Button(btn_frame, text="Go to web", width=10, command=self.go_to_web)
+        self.web_button.grid(row=0, column=3, padx=2)
 
         btn_frame2 = tk.Frame(self.root)
         btn_frame2.pack(**pad)
@@ -183,12 +184,26 @@ class PeakViewApp:
             self.web_dialog.refresh()
             self.web_dialog.lift()
         else:
-            self.web_dialog = WebDialog(self.root, self.web, on_stop=self._on_web_stopped)
+            self.web_dialog = WebDialog(
+                self.root, self.web, on_stop=self._on_web_stopped, on_hide=self._on_web_dialog_hidden
+            )
+        self._refresh_web_button()
         self.status.set("Web berjalan")
+
+    def _on_web_dialog_hidden(self):
+        self.web_dialog = None
+        self.status.set("Web masih berjalan - klik tombol web untuk QR / Stop")
 
     def _on_web_stopped(self):
         self.web_dialog = None
+        self._refresh_web_button()
         self.status.set("Web dihentikan")
+
+    def _refresh_web_button(self):
+        if self.web.running:
+            self.web_button.config(text="Web: ON", fg="darkgreen")
+        else:
+            self.web_button.config(text="Go to web", fg="black")
 
     def next_segment(self):
         if not self.session.next():
@@ -338,6 +353,7 @@ class PeakViewApp:
             self.status.set("Edit segments dibatalkan")
             return
         new_list, rename_map = result
+        current_seg = self.session.current_name()  # web may have switched while the dialog was open
 
         kept_originals = set(new_list) | set(rename_map.keys())
         to_delete = [s for s in old_segments if s not in kept_originals]
@@ -369,9 +385,12 @@ class PeakViewApp:
         new_current_seg = rename_map.get(current_seg, current_seg)
 
         save_segments(new_list)
-        reload_segments()
-        self.session.sync_to(new_current_seg)
-        self.store.reconfigure_segments(new_list, rename_map)
+
+        def swap_segments():
+            reload_segments()
+            self.store.reconfigure_segments(new_list, rename_map)
+
+        self.session.apply_edit(swap_segments, new_current_seg)
 
         self._render()
         self._auto_save()
@@ -392,7 +411,9 @@ class PeakViewApp:
         """Write the Excel report and return its path. Raises NoDataError. Thread-safe."""
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         out_path = OUTPUT_DIR / f"laporan_peak_{stamp}.xlsx"
-        return build_report(self.store.snapshot(), list(SOURCES), list(SEGMENTS), out_path, self.timeline.path)
+        peaks = self.store.snapshot()
+        segments = [s for s in SEGMENTS if s in peaks]  # mid-edit the list may lead the store
+        return build_report(peaks, list(SOURCES), segments, out_path, self.timeline.path)
 
     def generate_report(self):
         try:
@@ -435,8 +456,10 @@ class PeakViewApp:
 
     def _on_close(self):
         self._stop.set()
-        self.web.stop()
-        self.root.destroy()
+        try:
+            self.web.stop()
+        finally:
+            self.root.destroy()
 
 
 def main():

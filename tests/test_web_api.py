@@ -72,3 +72,19 @@ def test_apply_segment_rejects_bad_input(tmp_path, monkeypatch):
         valid, _ = web_api.apply_segment(ctx, body)
         assert valid is False
     assert ctx.session.index == 0
+
+
+def test_summary_tolerates_segments_missing_from_store(tmp_path, monkeypatch):
+    """SEGMENTS is swapped before the store is reshaped during a segment edit."""
+    ctx = make_context(tmp_path, monkeypatch)
+    warm(ctx)
+    ctx.segments.append("Brand New")
+    sm = web_api.build_summary(ctx)
+    assert [r["name"] for r in sm["segments"]] == ["Waiting Screen"]
+
+
+def test_state_index_and_name_agree(tmp_path, monkeypatch):
+    ctx = make_context(tmp_path, monkeypatch)
+    ctx.session.set_index(2)
+    s = web_api.build_state(ctx)
+    assert s["segments"][s["index"]]["name"] == s["segment"]
