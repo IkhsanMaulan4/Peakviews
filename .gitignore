@@ -13,3 +13,5 @@ output/
 calibration.json
 sources.json
 segments.json
+verify_report.py
+sample_report.xlsx

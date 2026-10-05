@@ -2,7 +2,7 @@
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 # Anaconda Python ships tcl86t.dll, tk86t.dll, libmpdec, liblzma, etc. in
 # <base_prefix>/Library/bin (instead of the standard <base>/DLLs). That dir
@@ -16,6 +16,9 @@ if os.path.isdir(_lib_bin):
 # RapidOCR ships ONNX model files + per-model yaml configs that pyinstaller's
 # import scanner can't see (they're loaded by string path at runtime).
 _rapidocr_datas, _rapidocr_binaries, _rapidocr_hidden = collect_all("rapidocr_onnxruntime")
+# openpyxl + et_xmlfile dipakai oleh report.py; sebagian sub-module di-import
+# secara lazy sehingga scanner pyinstaller bisa melewatkannya.
+_openpyxl_hidden = collect_submodules("openpyxl") + ["et_xmlfile"]
 
 block_cipher = None
 
@@ -24,7 +27,7 @@ a = Analysis(
     pathex=[],
     binaries=_rapidocr_binaries,
     datas=_rapidocr_datas,
-    hiddenimports=['PIL._tkinter_finder', 'PIL.ImageTk', *_rapidocr_hidden],
+    hiddenimports=['PIL._tkinter_finder', 'PIL.ImageTk', *_rapidocr_hidden, *_openpyxl_hidden],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
