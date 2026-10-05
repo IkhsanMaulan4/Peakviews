@@ -12,6 +12,7 @@ from segments import (
     reload_segments, save_segments,
 )
 from storage import PeakStore
+from timeline import TimelineTracker, STATUS_WARN, STATUS_ERROR
 from capture import capture_all, capture_all_with_debug
 from debug_window import OcrDebugWindow
 from calibration import load_calibration, run_calibration, run_edit_calibration, save_calibration
@@ -37,6 +38,7 @@ class PeakViewApp:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         self.session_file = OUTPUT_DIR / f"peak_{stamp}.txt"
+        self.timeline = TimelineTracker(OUTPUT_DIR, stamp, self.active_sources)
 
         root.title("Peak View")
         root.attributes("-topmost", True)
@@ -92,10 +94,18 @@ class PeakViewApp:
     def _render(self):
         seg = SEGMENTS[self.seg_index]
         self.seg_label.config(text=f"[{self.seg_index + 1}/{len(SEGMENTS)}] {seg}")
+        default_bg = self.root.cget("bg")
         for src, lbl in self.live_labels.items():
             val = self.live.get(src)
             display = self._fmt(val) if val is not None else "--"
-            lbl.config(text=f"{src}: {display}")
+            state = self.timeline.status(src)
+            if state == STATUS_ERROR:
+                colors = {"bg": "red", "fg": "white"}
+            elif state == STATUS_WARN:
+                colors = {"bg": "gold", "fg": "black"}
+            else:
+                colors = {"bg": default_bg, "fg": "black"}
+            lbl.config(text=f"{src}: {display}", **colors)
         peaks = self.store.get_current(seg)
         lines = ["Peak:"]
         for s in self.active_sources:
@@ -126,6 +136,7 @@ class PeakViewApp:
                     results = capture_all(self.regions)
                 self.live = results
                 seg = SEGMENTS[self.seg_index]
+                self.timeline.feed(seg, results)
                 for label, val in results.items():
                     self.store.update(seg, label, val)
                 self.root.after(0, self._render)
@@ -187,6 +198,7 @@ class PeakViewApp:
                 widget.destroy()
             self.live_labels = {}
             self.live = {src: None for src in self.active_sources}
+            self.timeline.set_sources(self.active_sources)
             for i, src in enumerate(self.active_sources):
                 row = i // 2
                 col = i % 2
@@ -247,6 +259,7 @@ class PeakViewApp:
         # Rebuild live UI — same pattern as recalibrate.
         self.active_sources = [s for s in new_list if s in new_regions]
         self.live = {src: None for src in self.active_sources}
+        self.timeline.set_sources(self.active_sources)
         for widget in self.live_frame.winfo_children():
             widget.destroy()
         self.live_labels = {}
