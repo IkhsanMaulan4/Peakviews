@@ -61,6 +61,21 @@ Waiting Screen  1234    567     890     123     2814
 TVC             2100    890     ...
 ```
 
+## Laporan Excel
+
+Tombol **Report** membuat `output/laporan_peak_YYYY-MM-DD_HHMM.xlsx` dari peak yang sedang aktif:
+
+- **Ringkasan**: highlight (peak tertinggi, segmen & channel paling rame, rata-rata), tabel perbandingan channel, dan bar chart (satu warna + nama per channel).
+- **Detail**: tabel peak per segmen + bar chart horizontal dengan nama segmen di tiap bar. Segmen yang semua channel-nya 0 dilewati.
+- **Timeline**: kurva penonton per source sepanjang event (hanya muncul kalau ada data timeline). Periode OCR gagal tampil bolong; sesi panjang di-downsample otomatis (maks 5.000 titik).
+
+## Timeline log & warning OCR
+
+- Selama app jalan, nilai viewer yang sudah dibersihkan dicatat tiap 5 detik ke `output/timeline_YYYY-MM-DD_HHMM.csv` (kolom: `timestamp, segment, <source...>, flags`).
+- Pembersihan memakai filter anti-spike yang sama dengan peak (median 7 sampel, cek kesepakatan ±5%, lonjakan/penurunan >1.3x harus konsisten 3 siklus). Nilai yang ditolak ditandai `held`/`gap` di kolom `flags`.
+- Label source di window berubah **kuning** kalau 5 detik tanpa bacaan valid dan **merah** setelah 15 detik (stream mati, window tertutup, atau kotak kalibrasi geser). Kembali normal otomatis saat bacaan pulih.
+- Kalau source diubah atau recalibrate di tengah event, CSV baru (`..._2.csv`) dimulai; Report memakai CSV terbaru.
+
 ## Catatan
 
 - Kalau angka viewer salah ke-OCR (misal "1.2K" malah jadi 12), recalibrate dan pastikan kotak benar-benar pas dengan angka (jangan ada ikon mata atau teks lain di dalam kotak).
